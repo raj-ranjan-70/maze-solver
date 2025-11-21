@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Maze Solver Visualizer</title>
+<style>
+  :root{--bg:#0b1220;--panel:#0f1724;--muted:#98a0b3;--accent:#3aa0ff;--good:#22c55e;--bad:#ef4444}
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;background:var(--bg);color:#e6eef8}
+  .app{display:grid;grid-template-columns:360px 1fr;gap:18px;padding:18px}
+  .card{background:var(--panel);padding:14px;border-radius:12px;border:1px solid rgba(255,255,255,0.03)}
+  h1{margin:0;font-size:18px}
+  label{display:block;margin-top:10px;color:var(--muted);font-size:13px}
+  input[type=range]{width:100%}
+  input[type=number], select{width:100%;padding:8px;border-radius:8px;background:#081019;border:1px solid rgba(255,255,255,0.03);color:#e6eef8}
+  .btns{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:10px}
+  button{padding:10px;border-radius:8px;border:none;background:#0b2946;color:#e6eef8;cursor:pointer;font-weight:600}
+  button.primary{background:var(--accent)}
+  #cv{background:#071018;border-radius:10px;width:100%;height:calc(100vh - 80px);display:block}
+  .note{font-size:12px;color:var(--muted);margin-top:8px}
+  .row{display:flex;gap:8px}
+  .small{font-size:12px;color:var(--muted)}
+  .controls{display:flex;gap:8px;margin-top:10px}
+  .legend{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;font-size:13px}
+  .swatch{width:14px;height:14px;border-radius:3px;display:inline-block;margin-right:6px}
+</style>
+</head>
+<body>
+  <div class="app">
+    <div class="card">
+      <h1>Maze Solver Visualizer</h1>
+      <div class="note">Choose algorithm, grid size, obstacle density, and speed. Click/drag to edit walls. Drag start/end to move them.</div>
+      <label>Algorithm</label>
+      <select id="algo">
+        <option value="bfs">BFS</option>
+        <option value="dfs">DFS</option>
+        <option value="dijkstra">Dijkstra</option>
+        <option value="astar">A* (Manhattan)</option>
+      </select>
+
+      <label>Rows</label>
+      <input id="rows" type="number" value="30" min="8" max="120" />
+      <label>Columns</label>
+      <input id="cols" type="number" value="40" min="8" max="160" />
+
+      <label>Obstacle % (<span id="obsVal">20</span>)</label>
+      <input id="obs" type="range" min="0" max="60" value="20" />
+
+      <label>Speed</label>
+      <input id="speed" type="range" min="0" max="3" value="2" />
+      <div class="row" style="margin-top:6px">
+        <button id="gen">Generate Maze</button>
+        <button id="clear">Clear Walls</button>
+      </div>
+
+      <label style="margin-top:12px">Visualization Controls</label>
+      <div class="btns">
+        <button id="startBtn" class="primary">Start</button>
+        <button id="pauseBtn">Pause</button>
+        <button id="stepBtn">Step</button>
+        <button id="resetBtn">Reset</button>
+      </div>
+
+      <div class="legend">
+        <div><span class="swatch" style="background:#0f1724;border:1px solid #2b2f36"></span>Empty</div>
+        <div><span class="swatch" style="background:#3b4451"></span>Wall</div>
+        <div><span class="swatch" style="background:#22c55e"></span>Start</div>
+        <div><span class="swatch" style="background:#ef4444"></span>End</div>
+        <div><span class="swatch" style="background:#3aa0ff"></span>Frontier</div>
+        <div><span class="swatch" style="background:#fbbf24"></span>Visited</div>
+        <div><span class="swatch" style="background:#ef476f"></span>Path</div>
+      </div>
+
+      <div class="note" style="margin-top:12px">Stats: <span id="stats">idle</span></div>
+    </div>
+
+    <div class="card">
+      <canvas id="cv"></canvas>
+    </div>
+  </div>
+<script>
+const canvas = document.getElementById('cv');
+const ctx = canvas.getContext('2d');
+let rowsEl = document.getElementById('rows');
+let colsEl = document.getElementById('cols');
+let obsEl = document.getElementById('obs');
+let obsVal = document.getElementById('obsVal');
+let algoEl = document.getElementById('algo');
+let speedEl = document.getElementById('speed');
+let statsEl = document.getElementById('stats');
+
+let ROWS = clamp(parseInt(rowsEl.value), 8, 120);
+let COLS = clamp(parseInt(colsEl.value), 8, 160);
+let OBSP = clamp(parseInt(obsEl.value), 0, 60);
+let SPEED = parseInt(speedEl.value);
+
+let grid = [];
+let cell = 18; let margin = 6;
+let start = {r: Math.floor(ROWS/2), c: Math.floor(COLS/4)};
+let end = {r: Math.floor(ROWS/2), c: Math.floor(3*COLS/4)};
+let dragging = null;
+let mouseDown = false;
+let paths = null;
+let stateSeq = [];
+let stepIndex = 0;
+let playTimer = null;
+let playing = false;
+
+function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+
+function initGrid(){
+  grid = new Array(ROWS).fill(0).map(()=>new Array(COLS).fill(0));
+}
+
+function resizeCanvas(){
+  cell = Math.max(6, Math.floor(Math.min((window.innerWidth-420)/COLS, (window.innerHeight-120)/ROWS)));
+  canvas.width = COLS*cell + 2*margin;
+  canvas.height = ROWS*cell + 2*margin;
+}
+
+function randGrid(){
+  initGrid();
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      if(Math.random()*100 < OBSP) grid[r][c]=1;
+    }
+  }
+  grid[start.r][start.c]=0; grid[end.r][end.c]=0;
+}
+
+function clearWalls(){ for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++) grid[r][c]=0; }
+
+function draw(){
+  ctx.fillStyle = '#071018'; ctx.fillRect(0,0,canvas.width,canvas.height);
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      const x = margin + c*cell; const y = margin + r*cell;
+      if(grid[r][c]===1) ctx.fillStyle='#3b4451'; else ctx.fillStyle='#081018';
+      ctx.fillRect(x,y,cell-1,cell-1);
+    }
+  }
+  drawOverlay();
+}
+
+let frontierSet = new Set();
+let visitedSet = new Set();
+let pathSet = new Set();
+
+function drawOverlay(){
+  for(let key of frontierSet){ const [r,c]=key.split('#').map(Number); drawCell(r,c,'#3aa0ff'); }
+  for(let key of visitedSet){ const [r,c]=key.split('#').map(Number); drawCell(r,c,'#fbbf24'); }
+  for(let key of pathSet){ const [r,c]=key.split('#').map(Number); drawCell(r,c,'#ef476f'); }
+  drawCell(start.r,start.c,'#22c55e');
+  drawCell(end.r,end.c,'#ef4444');
+}
+
+function drawCell(r,c,color){ if(r<0||c<0||r>=ROWS||c>=COLS) return; const x=margin+c*cell; const y=margin+r*cell; ctx.fillStyle=color; ctx.fillRect(x+2,y+2,cell-5,cell-5); }
+
+function cellAtPos(x,y){ const c = Math.floor((x - margin)/cell); const r = Math.floor((y - margin)/cell); if(r<0||c<0||r>=ROWS||c>=COLS) return null; return {r,c}; }
+
+canvas.addEventListener('mousedown', (e)=>{ const p = cellAtPos(e.offsetX,e.offsetY); if(!p) return; mouseDown=true; if(p.r===start.r && p.c===start.c){ dragging='start'; } else if(p.r===end.r && p.c===end.c){ dragging='end'; } else { dragging='wall'; toggleWall(p.r,p.c); } draw(); });
+canvas.addEventListener('mousemove', (e)=>{ if(!mouseDown) return; const p = cellAtPos(e.offsetX,e.offsetY); if(!p) return; if(dragging==='wall'){ grid[p.r][p.c] = grid[p.r][p.c] ? 0 : 1; } else if(dragging==='start'){ if(!(p.r===end.r && p.c===end.c)) { start.r=p.r; start.c=p.c; grid[start.r][start.c]=0; } } else if(dragging==='end'){ if(!(p.r===start.r && p.c===start.c)) { end.r=p.r; end.c=p.c; grid[end.r][end.c]=0; } } draw(); });
+window.addEventListener('mouseup', ()=>{ mouseDown=false; dragging=null; });
+
+function toggleWall(r,c){ if(r===start.r && c===start.c) return; if(r===end.r && c===end.c) return; grid[r][c] = grid[r][c] ? 0 : 1; }
+
+function neighbors(r,c){ const out=[]; if(r>0) out.push([r-1,c]); if(r<ROWS-1) out.push([r+1,c]); if(c>0) out.push([r,c-1]); if(c<COLS-1) out.push([r,c+1]); return out; }
+
+function runAlgorithm(){ frontierSet.clear(); visitedSet.clear(); pathSet.clear(); stateSeq = []; stepIndex=0; playing=false; if(playTimer){ clearInterval(playTimer); playTimer=null; }
+  const algo = algoEl.value; const s = [start.r,start.c]; const t = [end.r,end.c];
+  if(grid[s[0]][s[1]]===1 || grid[t[0]][t[1]]===1){ statsEl.textContent='Start or End is blocked'; return; }
+  const t0 = performance.now();
+  if(algo==='bfs') { const res = bfs(s,t); stateSeq = res.seq; }
+  else if(algo==='dfs') { const res = dfs(s,t); stateSeq = res.seq; }
+  else if(algo==='dijkstra') { const res = dijkstra(s,t); stateSeq = res.seq; }
+  else if(algo==='astar') { const res = astar(s,t); stateSeq = res.seq; }
+  const t1 = performance.now();
+  statsEl.textContent = `Generated ${stateSeq.length} steps in ${(t1-t0).toFixed(1)} ms`;
+  renderStep();
+}
+
+function enqueueState(type, node, extra){ if(type==='visit') visitedSet.add(node[0]+'#'+node[1]); if(type==='frontier') frontierSet.add(node[0]+'#'+node[1]); if(type==='path') pathSet.add(node[0]+'#'+node[1]); stateSeq.push({type,node,extra}); }
+
+function renderStep(){ frontierSet.clear(); visitedSet.clear(); pathSet.clear(); for(let i=0;i<=stepIndex && i<stateSeq.length;i++){ const s = stateSeq[i]; if(s.type==='frontier') frontierSet.add(s.node[0]+'#'+s.node[1]); else if(s.type==='visit') visitedSet.add(s.node[0]+'#'+s.node[1]); else if(s.type==='path') pathSet.add(s.node[0]+'#'+s.node[1]); }
+  draw(); }
+
+function play(){ if(playing) return; playing=true; const delays=[0,200,80,12]; const delay = delays[SPEED] || 80; playTimer = setInterval(()=>{ stepIndex++; if(stepIndex>=stateSeq.length){ clearInterval(playTimer); playing=false; } renderStep(); }, Math.max(1,delay)); }
+function pause(){ if(playTimer) clearInterval(playTimer); playTimer=null; playing=false; }
+function stepOnce(){ if(stepIndex < stateSeq.length-1) stepIndex++; renderStep(); }
+function resetViz(){ pause(); stepIndex=0; frontierSet.clear(); visitedSet.clear(); pathSet.clear(); stateSeq=[]; draw(); statsEl.textContent='reset'; }
+
+function bfs(s,t){ 
+  const q=[s]; 
+  const seen = new Set([s[0]+'#'+s[1]]); 
+  const parent = new Map(); 
+  enqueueState('frontier', s);
+
+  while(q.length){
+    const cur = q.shift();
+    enqueueState('visit', cur);
+    if(cur[0]===t[0] && cur[1]===t[1]){
+      const path = reconstructPath(parent, s, t);
+      for(const p of path) enqueueState('path', p);
+      return {seq: stateSeq, path};
+    }
+
+    for(const nb of neighbors(cur[0],cur[1])){
+      const key = nb[0]+'#'+nb[1]; 
+      if(seen.has(key)) continue;
+      if(grid[nb[0]][nb[1]]===1) continue;
+      seen.add(key); 
+      parent.set(key, cur); 
+      q.push(nb); 
+      enqueueState('frontier', nb);
+    }
+  }
+  return {seq: stateSeq, path: null};
+}
+
+function dfs(s,t){
+  const stack=[s];
+  const seen = new Set([s[0]+'#'+s[1]]);
+  const parent = new Map();
+  enqueueState('frontier', s);
+
+  while(stack.length){
+    const cur = stack.pop();
+    enqueueState('visit', cur);
+    if(cur[0]===t[0] && cur[1]===t[1]){
+      const path = reconstructPath(parent, s, t);
+      for(const p of path) enqueueState('path', p);
+      return {seq: stateSeq, path};
+    }
+    for(const nb of neighbors(cur[0],cur[1])){
+      const key = nb[0]+'#'+nb[1];
+      if(seen.has(key)) continue;
+      if(grid[nb[0]][nb[1]]===1) continue; 
+      seen.add(key); 
+      parent.set(key, cur); 
+      stack.push(nb); 
+      enqueueState('frontier', nb);
+    }
+  }
+  return {seq: stateSeq, path: null};
+}
+
+function dijkstra(s,t){ 
+  const pq = new MinHeap(); 
+  const dist = new Map(); 
+  const parent = new Map(); 
+  const startKey = s[0]+'#'+s[1]; 
+  dist.set(startKey,0); 
+  pq.push({pos:s, d:0}); 
+  enqueueState('frontier', s);
+  while(!pq.empty()){
+    const cur = pq.pop();
+    const key = cur.pos[0]+'#'+cur.pos[1];
+    if(cur.d !== dist.get(key)) continue;
+    enqueueState('visit', cur.pos);
+    if(cur.pos[0]===t[0] && cur.pos[1]===t[1]){
+      const path = reconstructPath(parent, s, t);
+      for(const p of path) enqueueState('path', p);
+      return {seq: stateSeq, path};
+    }
+    for(const nb of neighbors(cur.pos[0],cur.pos[1])){
+      if(grid[nb[0]][nb[1]]===1) continue;
+      const nk = nb[0]+'#'+nb[1]; 
+      const nd = cur.d + 1; 
+      if(!dist.has(nk) || nd < dist.get(nk)){
+        dist.set(nk, nd);
+        parent.set(nk, cur.pos); 
+        pq.push({pos:nb, d:nd}); 
+        enqueueState('frontier', nb); 
+      }
+    }
+  }
+  return {seq: stateSeq, path: null}; 
+}
+
+function astar(s,t){ const pq = new MinHeap();
+  const gScore = new Map(); 
+  const parent = new Map(); 
+  const startKey = s[0]+'#'+s[1]; 
+  gScore.set(startKey,0); 
+  pq.push({pos:s, f:heur(s,t), g:0}); 
+  enqueueState('frontier', s);
+  while(!pq.empty()){
+    const cur = pq.pop(); 
+    const key = cur.pos[0]+'#'+cur.pos[1]; 
+    enqueueState('visit', cur.pos);
+    if(cur.pos[0]===t[0] && cur.pos[1]===t[1]){ 
+      const path = reconstructPath(parent, s, t); 
+      for(const p of path) 
+      enqueueState('path', p); 
+    return {seq: stateSeq, path};
+    }
+    for(const nb of neighbors(cur.pos[0],cur.pos[1])){
+      if(grid[nb[0]][nb[1]]===1) continue;
+      const nk = nb[0]+'#'+nb[1]; 
+      const tentativeG = cur.g + 1; 
+      if(!gScore.has(nk) || tentativeG < gScore.get(nk)){ 
+        gScore.set(nk, tentativeG); 
+        parent.set(nk, cur.pos); 
+        const f = tentativeG + heur(nb,t); 
+        pq.push({pos:nb, f, g:tentativeG}); 
+        enqueueState('frontier', nb); 
+      }
+    }
+  }
+  return {seq: stateSeq, path: null}; 
+}
+
+function heur(a,b){ return Math.abs(a[0]-b[0]) + Math.abs(a[1]-b[1]); }
+
+function reconstructPath(parent, s, t){ const path = []; let curK = t[0]+'#'+t[1]; if(!parent.has(curK) && !(s[0]===t[0] && s[1]===t[1])){ return []; } while(true){ const parts = curK.split('#').map(Number); path.push([parts[0],parts[1]]); if(parts[0]===s[0] && parts[1]===s[1]) break; const p = parent.get(curK); curK = p[0]+'#'+p[1]; if(!curK) break; } path.reverse(); return path; }
+
+class MinHeap{
+  constructor(){ this.a=[]; }
+  push(x){ this.a.push(x); this._siftUp(this.a.length-1); }
+  pop(){ if(this.a.length===0) return null; const top=this.a[0]; const last=this.a.pop(); if(this.a.length) this.a[0]=last,this._siftDown(0); return top; }
+  _siftUp(i){ const a=this.a; while(i>0){ const p=(i-1)>>1; if(this._cmp(a[i],a[p])<0){ [a[i],a[p]]=[a[p],a[i]]; i=p; } else break; } }
+  _siftDown(i){ const a=this.a; while(true){ let l=i*2+1, r=l+1, s=i; if(l<a.length && this._cmp(a[l],a[s])<0) s=l; if(r<a.length && this._cmp(a[r],a[s])<0) s=r; if(s!==i){ [a[i],a[s]]=[a[s],a[i]]; i=s; } else break; } }
+  _cmp(x,y){ if(x.f!==undefined && y.f!==undefined) return x.f - y.f; if(x.d!==undefined && y.d!==undefined) return x.d - y.d; return 0; }
+  empty(){ return this.a.length===0; }
+}
+
+obsEl.addEventListener('input', ()=>{ OBSP = parseInt(obsEl.value); obsVal.textContent = OBSP; });
+rowsEl.addEventListener('change', ()=>{ ROWS = clamp(parseInt(rowsEl.value),8,120); resetLayout(); });
+colsEl.addEventListener('change', ()=>{ COLS = clamp(parseInt(colsEl.value),8,160); resetLayout(); });
+speedEl.addEventListener('input', ()=>{ SPEED = parseInt(speedEl.value); });
+
+function resetLayout(){ resizeCanvas(); initGrid(); // adjust start/end to be inside
+  start = {r: clamp(Math.floor(ROWS/2),0,ROWS-1), c: clamp(Math.floor(COLS/4),0,COLS-1)};
+  end = {r: clamp(Math.floor(ROWS/2),0,ROWS-1), c: clamp(Math.floor(3*COLS/4),0,COLS-1)};
+  draw(); }
+
+document.getElementById('gen').addEventListener('click', ()=>{ initGrid(); randGrid(); draw(); });
+document.getElementById('clear').addEventListener('click', ()=>{ clearWalls(); draw(); });
+document.getElementById('startBtn').addEventListener('click', ()=>{ runAlgorithm(); play(); });
+document.getElementById('pauseBtn').addEventListener('click', ()=>{ pause(); });
+document.getElementById('stepBtn').addEventListener('click', ()=>{ stepOnce(); });
+document.getElementById('resetBtn').addEventListener('click', ()=>{ resetViz(); });
+
+window.addEventListener('resize', ()=>{ resizeCanvas(); draw(); });
+
+initGrid(); randGrid(); resizeCanvas(); draw();
+</script>
+</body>
+</html>
